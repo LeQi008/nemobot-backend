@@ -177,7 +177,7 @@ def get_random_game(category: str = Query(...)):
         print("ERROR:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-# ==== Dad Joke ====
+# ==== Dad Jokes ====
 
 @app.get("/joke")
 async def get_joke(category: Optional[str] = None):

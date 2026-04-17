@@ -239,7 +239,7 @@ def get_nasa_apod():
     url = "https://api.nasa.gov/planetary/apod"
     
     params = {
-        "api_key": "DEMO_KEY"
+        "api_key": os.getenv("NASA_API_KEY")
     }
 
     try:

@@ -1,13 +1,15 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from typing import Optional
-import asyncio
-from spotify_things.spotify_client import get_spotify_client, get_auth_manager
+import random
 import json
-from typing import List
 import requests
+import os
+import html
+from typing import Optional,List
+from spotify_things.spotify_client import get_spotify_client, get_auth_manager
+
 
 app = FastAPI(title="LQ Nemobot Backend", version="1.0.0")
 
@@ -20,7 +22,253 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==== SPOTIFY ===
+
+# === Trivia Questions API ===
+
+BASE_URL = "https://opentdb.com/api.php"
+
+CATEGORY_MAP = {
+    "General Knowledge": 9,
+    "Entertainment: Books": 10,
+    "Entertainment: Film": 11,
+    "Entertainment: Music": 12,
+    "Entertainment: Musicals & Theatres": 13,
+    "Entertainment: Television": 14,
+    "Entertainment: Video Games": 15,
+    "Entertainment: Board Games": 16,
+    "Science & Nature": 17,
+    "Science: Computers": 18,
+    "Science: Mathematics": 19,
+    "Mythology": 20,
+    "Sports": 21,
+    "Geography": 22,
+    "History": 23,
+    "Politics": 24,
+    "Art": 25,
+    "Celebrities": 26,
+    "Animals": 27,
+    "Vehicles": 28,
+    "Entertainment: Comics": 29,
+    "Science: Gadgets": 30,
+    "Entertainment: Japanese Anime & Manga": 31,
+    "Entertainment: Cartoon & Animations": 32,
+}
+
+@app.get("/triviaQuestion")
+def get_trivia_question(
+    difficulty: str | None = Query(None),
+    category: str | None = Query(None),  # MUST be str
+):
+    params = {
+        "amount": 1,
+        "encode": "url3986"
+    }
+
+    # Convert category name → ID
+    if category:
+        if category not in CATEGORY_MAP:
+            return {
+                "status": "error",
+                "message": f"Invalid category: {category}"
+            }
+        params["category"] = CATEGORY_MAP[category]
+
+    if difficulty:
+        params["difficulty"] = difficulty.lower()
+
+    try:
+        response = requests.get(BASE_URL, params=params, timeout=5)
+        response.raise_for_status()
+    except requests.RequestException:
+        return {
+            "status": "error",
+            "message": "Failed to fetch trivia question"
+        }
+
+    data = response.json()
+
+    if data["response_code"] != 0:
+        return {
+            "status": "error",
+            "message": f"No questions found (code {data['response_code']})"
+        }
+
+    q = data["results"][0]
+
+    def decode(text):
+        return html.unescape(requests.utils.unquote(text))
+
+    correct = decode(q["correct_answer"])
+    incorrect = [decode(a) for a in q["incorrect_answers"]]
+
+    return {
+        "status": "success",
+        "question": decode(q["question"]),
+        "category": q["category"],
+        "difficulty": q["difficulty"],
+        "type": q["type"],
+        "correct_answer": correct,
+        "incorrect_answers": incorrect,
+        "all_answers": [correct] + incorrect
+    }
+
+
+# === Random Games API ===
+
+# Allowed categories (normalized to lowercase)
+ALLOWED_CATEGORIES = {
+    "mmorpg", "shooter", "strategy", "moba", "racing", "sports", "social",
+    "sandbox", "open-world", "survival", "pvp", "pve", "pixel", "voxel",
+    "zombie", "turn-based", "first-person", "third-Person", "top-down",
+    "tank", "space", "sailing", "side-scroller", "superhero", "permadeath",
+    "card", "battle-royale", "mmo", "mmofps", "mmotps", "3d", "2d", "anime",
+    "fantasy", "sci-fi", "fighting", "action-rpg", "action", "military",
+    "martial-arts", "flight", "low-spec", "tower-defense", "horror", "mmorts"
+}
+
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+
+@app.get("/randomGame")
+def get_random_game(category: str = Query(...)):
+    url = "https://free-to-play-games-database.p.rapidapi.com/api/games"
+
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "free-to-play-games-database.p.rapidapi.com"
+    }
+
+    params = {
+        "platform": "browser",
+        "category": category
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code != 200:
+            print("API ERROR:", response.text)
+            raise HTTPException(
+                status_code=response.status_code,
+                detail="RapidAPI request failed"
+            )
+
+        games = response.json()
+
+        if not games:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No games found for category '{category}'"
+            )
+
+        game = random.choice(games)
+
+        game_url = game.get("game_url")
+        print(f"gameurl: {game_url}")
+
+        return {
+            "title": game.get("title"),
+            "description": game.get("short_description"),
+            "url": game.get("game_url"),
+            "genre": game.get("genre"),
+            "platform": game.get("platform")
+        }
+
+    except Exception as e:
+        print("ERROR:", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==== Dad Joke ====
+
+@app.get("/joke")
+async def get_joke(category: Optional[str] = None):
+    url = "https://groandeck.com/api/v1/random"
+
+    try:
+        params = {}
+        if category:
+            params["category"] = category
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params)
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail="Joke API failed"
+            )
+
+        data = response.json()
+
+        return {
+            "setup": data.get("setup"),
+            "punchline": data.get("punchline"),
+            "tags": data.get("tags"),
+            "explanation": data.get("explanation"),
+            "source": data.get("url")
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/joke/categories")
+async def get_joke_categories():
+    url = "https://groandeck.com/api/v1/categories"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail="Failed to fetch joke categories"
+            )
+
+        data = response.json()
+
+        return data  # returns full structure with counts
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==== NASA API ====
+
+@app.get("/nasaAPOD")
+def get_nasa_apod():
+    url = "https://api.nasa.gov/planetary/apod"
+    
+    params = {
+        "api_key": "DEMO_KEY"
+    }
+
+    try:
+        print("Before req")
+        response = requests.get(url, params=params)
+        print("after req")
+
+        if response.status_code != 200:
+            print("NASA ERROR:", response.text)  
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=response.text
+            )
+
+        data = response.json()
+
+        return {
+            "title": data.get("title"),
+            "description": data.get("explanation"),
+            "url": data.get("url"),
+            "media_type": data.get("media_type"),
+            "date": data.get("date")
+        }
+
+    except Exception as e:
+        print("ERROR:", e)  
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==== SPOTIFY ====
 
 GENRE_FILE_PATH = r"E:\SC4052 Cloud Computing\nemobot-weather-backend\spotify_things\genre-seeds.json"
 
@@ -31,6 +279,29 @@ VALID_GENRES = set(data["genres"])
 
 # temporary storage for Spotify API
 TOKEN_INFO = None
+
+# Since nemobot only accepts from http://localhost:8000/... WHILE spotify app DOES NOT ALLOw http://localhost:8000/ , so have to do a workaround after generating .cache that is
+@app.get("/pseudoSpotify")
+async def pseudo_spotify(request: Request):
+    try:
+        # Step 1: Get original query string
+        query_string = request.url.query  # "genres=pop&genres=chill"
+
+        # Step 2: Construct internal URL
+        target_url = f"http://127.0.0.1:8000/create_playlist?{query_string}"
+
+        # Step 3: Call your own backend
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(target_url)
+
+        # Step 4: Return response directly
+        return response.json()
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 @app.get("/callback")
 def callback(code: str):
@@ -170,190 +441,6 @@ async def get_coordinates_for_city(city: str):
 async def root():
     """Root endpoint to check if the API is running"""
     return {"message": "LQ Nemobot API Backend is running!"}
-
-@app.get("/weather/{city}")
-async def get_weather(city: str, units: Optional[str] = "celsius"):
-    """
-    Get weather data for a specific city
-    
-    Args:
-        city: Name of the city
-        units: Temperature units (celsius or fahrenheit). Default: celsius
-    
-    Returns:
-        JSON response with weather data
-    """
-    if not city:
-        raise HTTPException(status_code=400, detail="City name is required")
-    
-    try:
-        # First, get coordinates for the city
-        location = await get_coordinates_for_city(city)
-        
-        # Then get weather data
-        return await get_weather_by_coordinates(
-            location["lat"], 
-            location["lon"], 
-            units,
-            city_info=location
-        )
-            
-    except HTTPException:
-        raise
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error connecting to weather service: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Unexpected error: {str(e)}"
-        )
-
-@app.get("/weather/coordinates/{lat}/{lon}")
-async def get_weather_by_coordinates(lat: float, lon: float, units: Optional[str] = "celsius", city_info: Optional[dict] = None):
-    """
-    Get weather data for specific coordinates
-    
-    Args:
-        lat: Latitude
-        lon: Longitude
-        units: Temperature units (celsius or fahrenheit). Default: celsius
-        city_info: Optional city information from geocoding
-    
-    Returns:
-        JSON response with weather data
-    """
-    # Determine temperature unit parameter for API
-    temp_unit = "celsius" if units == "celsius" else "fahrenheit"
-    
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "current": [
-            "temperature_2m", 
-            "relative_humidity_2m", 
-            "apparent_temperature",
-            "is_day",
-            "precipitation",
-            "weather_code",
-            "cloud_cover",
-            "pressure_msl",
-            "surface_pressure",
-            "wind_speed_10m",
-            "wind_direction_10m",
-            "wind_gusts_10m"
-        ],
-        "daily": [
-            "weather_code",
-            "temperature_2m_max",
-            "temperature_2m_min",
-            "apparent_temperature_max",
-            "apparent_temperature_min",
-            "precipitation_sum",
-            "wind_speed_10m_max",
-            "wind_gusts_10m_max",
-            "wind_direction_10m_dominant"
-        ],
-        "temperature_unit": temp_unit,
-        "wind_speed_unit": "kmh",
-        "precipitation_unit": "mm",
-        "timezone": "auto",
-        "forecast_days": 1
-    }
-    
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(WEATHER_API_URL, params=params)
-            
-            if response.status_code == 400:
-                raise HTTPException(status_code=400, detail="Invalid coordinates")
-            elif response.status_code != 200:
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"Weather API error: {response.status_code}"
-                )
-            
-            weather_data = response.json()
-            current = weather_data["current"]
-            daily = weather_data["daily"]
-            
-            # Weather code mapping (simplified version)
-            weather_codes = {
-                0: {"main": "Clear", "description": "Clear sky"},
-                1: {"main": "Clear", "description": "Mainly clear"},
-                2: {"main": "Clouds", "description": "Partly cloudy"},
-                3: {"main": "Clouds", "description": "Overcast"},
-                45: {"main": "Fog", "description": "Fog"},
-                48: {"main": "Fog", "description": "Depositing rime fog"},
-                51: {"main": "Drizzle", "description": "Light drizzle"},
-                53: {"main": "Drizzle", "description": "Moderate drizzle"},
-                55: {"main": "Drizzle", "description": "Dense drizzle"},
-                61: {"main": "Rain", "description": "Slight rain"},
-                63: {"main": "Rain", "description": "Moderate rain"},
-                65: {"main": "Rain", "description": "Heavy rain"},
-                71: {"main": "Snow", "description": "Slight snow"},
-                73: {"main": "Snow", "description": "Moderate snow"},
-                75: {"main": "Snow", "description": "Heavy snow"},
-                80: {"main": "Rain", "description": "Slight rain showers"},
-                81: {"main": "Rain", "description": "Moderate rain showers"},
-                82: {"main": "Rain", "description": "Violent rain showers"},
-                95: {"main": "Thunderstorm", "description": "Thunderstorm"},
-                96: {"main": "Thunderstorm", "description": "Thunderstorm with slight hail"},
-                99: {"main": "Thunderstorm", "description": "Thunderstorm with heavy hail"}
-            }
-            
-            weather_code = current.get("weather_code", 0)
-            weather_info = weather_codes.get(weather_code, {"main": "Unknown", "description": "Unknown weather"})
-            
-            # Format the response
-            formatted_response = {
-                "city": city_info.get("name", "Unknown") if city_info else "Unknown",
-                "country": city_info.get("country", "") if city_info else "",
-                "region": city_info.get("admin1", "") if city_info else "",
-                "temperature": {
-                    "current": current.get("temperature_2m"),
-                    "feels_like": current.get("apparent_temperature"),
-                    "min": daily["temperature_2m_min"][0] if daily.get("temperature_2m_min") else None,
-                    "max": daily["temperature_2m_max"][0] if daily.get("temperature_2m_max") else None,
-                    "units": temp_unit
-                },
-                "weather": {
-                    "main": weather_info["main"],
-                    "description": weather_info["description"],
-                    "code": weather_code,
-                    "is_day": current.get("is_day", 1) == 1
-                },
-                "humidity": current.get("relative_humidity_2m"),
-                "pressure": current.get("pressure_msl"),
-                "wind": {
-                    "speed": current.get("wind_speed_10m"),
-                    "direction": current.get("wind_direction_10m"),
-                    "gusts": current.get("wind_gusts_10m")
-                },
-                "precipitation": current.get("precipitation"),
-                "cloud_cover": current.get("cloud_cover"),
-                "coordinates": {
-                    "lat": lat,
-                    "lon": lon
-                },
-                "timezone": weather_data.get("timezone"),
-                "raw_data": weather_data  # Include full API response for flexibility
-            }
-            
-            return formatted_response
-            
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error connecting to weather service: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Unexpected error: {str(e)}"
-        )
 
 if __name__ == "__main__":
     import uvicorn

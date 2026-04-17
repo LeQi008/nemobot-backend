@@ -403,40 +403,6 @@ def create_playlist(genres: List[str] = Query(...)):
             "message": str(e)
         }
 
-# TO REMOVE ===
-    
-GEOCODING_API_URL = "https://geocoding-api.open-meteo.com/v1/search"
-WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
-
-async def get_coordinates_for_city(city: str):
-    """Get latitude and longitude for a city using Open-Meteo Geocoding API"""
-    params = {
-        "name": city,
-        "count": 1,
-        "language": "en",
-        "format": "json"
-    }
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.get(GEOCODING_API_URL, params=params)
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Geocoding service error")
-            
-        data = response.json()
-        
-        if not data.get("results"):
-            raise HTTPException(status_code=404, detail=f"City '{city}' not found")
-            
-        result = data["results"][0]
-        return {
-            "lat": result["latitude"],
-            "lon": result["longitude"],
-            "name": result["name"],
-            "country": result.get("country", ""),
-            "admin1": result.get("admin1", "")  # State/Province
-        }
-
 @app.get("/")
 async def root():
     """Root endpoint to check if the API is running"""
